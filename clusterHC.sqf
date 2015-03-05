@@ -9,7 +9,9 @@
 * It seems that the dedicated server and headless client processes never use more than 20-22% CPU each.
 * With a dedicated server and 3 headless clients, that's about 88% CPU with 10-12% left over.  Far more efficient use of your processing power.
 * 
-* _isLOS function provided by SaOK - http://forums.bistudio.com/showthread.php?135252-Line-Of-Sight-(Example-Thread)&highlight=los
+* _isLOS function provided by:
+* SaOK - http://forums.bistudio.com/showthread.php?135252-Line-Of-Sight-(Example-Thread)&highlight=los
+* TPW MODS: http://forums.bistudio.com/showthread.php?164304-TPW-MODS-enhanced-realism-immersion-for-Arma-3-SP
 *
 */
 
@@ -19,7 +21,7 @@ cleanUpThreshold = 5; // Threshold of number of dead bodies + destroyed vehicles
 fpsLowerBound = 25;
 fpsUpperThreshold = 35;
 
-_hintDebug = compile '
+_hintDebug = {
   _tmp = 0;
   { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
   hintSilent composeText [format ["FPS: %1", diag_fps], lineBreak,
@@ -29,41 +31,29 @@ _hintDebug = compile '
               format ["OPFOR: %1", east countSide allUnits], lineBreak,
               format ["CIV: %1", civilian countSide allUnits], lineBreak,
               format ["Cached: %1", _tmp]];
-';
+};
 
-_enableAllSim = compile '
+_enableAllSim = {
   while {true} do {
     waitUntil {diag_fps >= fpsUpperThreshold};
     {
       if (diag_fps > fpsLowerBound) then {{_x enableSimulation true; _x hideObject false;} forEach (units _x);};      
     } forEach (allGroups);
   };
-';
+};
 
-/*
-_a = _unit;  
-_b = _near;  
-_eyedv = eyedirection _a;  
-_eyed = ((_eyedv select 0) atan2 (_eyedv select 1));   
-_dirto = ([_b, _a] call bis_fnc_dirto);  
-_ang = abs (_dirto - _eyed); 
-_eyepa = eyepos _a; 
-_eyepb = eyepos _b; 
-_tint = terrainintersectasl [_eyepa, _eyepb]; 
-_lint = lineintersects [_eyepa, _eyepb]; 
-if (((_ang > 120) && (_ang < 240)) && {!(_lint) && !(_tint)}) then
-*/
-
-_cacheCheckPlayer = '
-  _getGroupDistances = compile "
+_cacheCheckPlayer = {
+  _getGroupDistances = {
     _groupDistancesInside = [ ["""",0] ];
 
     {
       _groupDistancesInside = _groupDistancesInside + [ [groupID _x, (getPosASL player) distance (getPosASL ((units _x) select 0))] ];
     } forEach (allGroups);
-  _groupDistancesInside";
 
-  _getFurthestElement = compile "
+    _groupDistancesInside
+  };
+
+  _getFurthestElement = {
     _groupDistancesInside = _this;
     _furthestElementInside = 0;
     _currentDistance = 0;
@@ -76,9 +66,11 @@ _cacheCheckPlayer = '
         if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
       };
     };
-  _furthestElementInside";
 
-  _isLOS = compile "      
+    _furthestElementInside
+  };
+
+  _isLOS = {      
     _a = _this select 0;
     _b = _this select 1;
     _eyeDV = eyeDirection _b;
@@ -92,7 +84,9 @@ _cacheCheckPlayer = '
     _rc = false;
 
     if (((_ang > 120) && (_ang < 240)) && {!(_lint) && !(_tint)}) then { _rc = true; };
-  _rc";
+
+    _rc
+  };
 
   while {true} do {
     waitUntil {diag_fps <= fpsLowerBound};
@@ -135,7 +129,7 @@ _cacheCheckPlayer = '
     };
     diag_log "clusterHC: Cache Complete";
   };
-';
+};
 
 diag_log "clusterHC: Started";
 
@@ -161,7 +155,7 @@ HC3SimArray = []; // Will become an array of groups HC3 owns. Server broadcasts 
 // Function _cacheCheckHC
 // Input: HCSimArray, HC2SimArray, or HC3SimArray
 // Example: HCSimArray call _cacheCheckHC;
-_cacheCheckHC = compile '
+_cacheCheckHC = {
   _thisSimArray = _this;
 
   { _x enableSimulation true; _x hideObject false; } forEach (allUnits);
@@ -202,7 +196,9 @@ _cacheCheckHC = compile '
   };
 
   { { _x enableSimulation true; _x hideObject false; } forEach (units _x); } forEach (_thisSimArray);
-  true;';
+  
+  true;
+};
 
 diag_log format["clusterHC: First pass will begin in %1 seconds", rebalanceTimer];
 
