@@ -8,14 +8,28 @@
 *
 * It seems that the dedicated server and headless client processes never use more than 20-22% CPU each.
 * With a dedicated server and 3 headless clients, that's about 88% CPU with 10-12% left over.  Far more efficient use of your processing power.
+* 
+* _isLOS function provided by SaOK - http://forums.bistudio.com/showthread.php?135252-Line-Of-Sight-(Example-Thread)&highlight=los
 *
 */
 
 // These variables may be manipulated
 rebalanceTimer = 5;  // Rebalance sleep timer in seconds
 cleanUpThreshold = 5; // Threshold of number of dead bodies + destroyed vehicles before forcing a clean up
-fpsLowerBound = 30;
-fpsUpperThreshold = 40;
+fpsLowerBound = 25;
+fpsUpperThreshold = 35;
+
+_hintDebug = compile '
+  _tmp = 0;
+  { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
+  hintSilent composeText [format ["FPS: %1", diag_fps], lineBreak,
+              format ["FPSMin: %1", diag_fpsmin], lineBreak,
+              format ["Number of Units: %1", count allUnits], lineBreak,
+              format ["BLUFOR: %1", west countSide allUnits], lineBreak,
+              format ["OPFOR: %1", east countSide allUnits], lineBreak,
+              format ["CIV: %1", civilian countSide allUnits], lineBreak,
+              format ["Cached: %1", _tmp]];
+';
 
 _enableAllSim = compile '
   while {true} do {
@@ -23,25 +37,62 @@ _enableAllSim = compile '
     {
       if (diag_fps > fpsLowerBound) then {{_x enableSimulation true; _x hideObject false;} forEach (units _x);};      
     } forEach (allGroups);
-  };';
+  };
+';
 
-_cacheCheckPlayer = compile '
-  _getGroupDistances = compile "_groupDistancesInside = [ ["""",-1] ]; { _groupDistancesInside = _groupDistancesInside + [ [groupID _x, player distance ((units _x) select 0)] ]; } forEach (allGroups); _groupDistancesInside";
+/*
+_a = _unit;  
+_b = _near;  
+_eyedv = eyedirection _a;  
+_eyed = ((_eyedv select 0) atan2 (_eyedv select 1));   
+_dirto = ([_b, _a] call bis_fnc_dirto);  
+_ang = abs (_dirto - _eyed); 
+_eyepa = eyepos _a; 
+_eyepb = eyepos _b; 
+_tint = terrainintersectasl [_eyepa, _eyepb]; 
+_lint = lineintersects [_eyepa, _eyepb]; 
+if (((_ang > 120) && (_ang < 240)) && {!(_lint) && !(_tint)}) then
+*/
+
+_cacheCheckPlayer = '
+  _getGroupDistances = compile "
+    _groupDistancesInside = [ ["""",0] ];
+
+    {
+      _groupDistancesInside = _groupDistancesInside + [ [groupID _x, (getPosASL player) distance (getPosASL ((units _x) select 0))] ];
+    } forEach (allGroups);
+  _groupDistancesInside";
 
   _getFurthestElement = compile "
-      _groupDistancesInside = _this;
-      _furthestElementInside = 0;
-      _currentDistance = -1;      
-      _numGroupDistances = count _groupDistancesInside;
-      for ""_i"" from 0 to _numGroupDistances step 1 do {
-        _currentDistance = ((_groupDistancesInside select _i) select 1);
-        if (isNil ""_currentDistance"") then { _currentDistance = -1; };
-        
-        if ( _currentDistance != -1 ) then {
-          if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
-        };
+    _groupDistancesInside = _this;
+    _furthestElementInside = 0;
+    _currentDistance = 0;
+    _numGroupDistances = count _groupDistancesInside;
+    for ""_i"" from 0 to (_numGroupDistances - 1) step 1 do {
+      _currentDistance = ((_groupDistancesInside select _i) select 1);
+      if (isNil ""_currentDistance"") then { _currentDistance = 0; };
+      
+      if ( _currentDistance != 0 ) then {
+        if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
       };
-      _furthestElementInside";
+    };
+  _furthestElementInside";
+
+  _isLOS = compile "      
+    _a = _this select 0;
+    _b = _this select 1;
+    _eyeDV = eyeDirection _b;
+    _eyeD = ((_eyeDV select 0) atan2 (_eyeDV select 1));
+    _dirTo = [_b, _a] call BIS_fnc_dirTo;
+    _ang = abs (_dirto - _eyed);
+    _eyePb = eyePos _b;
+    _eyePa = eyePos _a;
+    _tint = terrainintersectasl [_eyePa, _eyePb];
+    _lint = lineintersects [_eyePa, _eyePb];
+    _rc = false;
+
+    if (((_ang > 120) && (_ang < 240)) && {!(_lint) && !(_tint)}) then { _rc = true; };
+  _rc";
 
   while {true} do {
     waitUntil {diag_fps <= fpsLowerBound};
@@ -50,33 +101,48 @@ _cacheCheckPlayer = compile '
     _groupDistances = call _getGroupDistances;
     waitUntil {!isNil "_groupDistances"};
 
-    // TODO: Design loop to construct the finished _groupDistances array and compare in the loop below to recall (_groupDistances = call _getGroupDistances;)
-
     while {diag_fps <= fpsLowerBound} do {
+      _cacheCount = 0;
+      { if (_x select 1 == 0) then { _cacheCount = _cacheCount + 1; }; } forEach (_groupDistances);
+      if ( _cacheCount == ((count _groupDistances) - 1) ) then { diag_log "clusterHC: Recall _getGroupDistances"; _groupDistances = call _getGroupDistances; };
+
       _furthestElement = _groupDistances call _getFurthestElement;
       waitUntil {!isNil "_furthestElement"};
 
-      if ( ((_groupDistances select _furthestElement) select 1) != -1 ) then {
+      if ( ((_groupDistances select _furthestElement) select 1) != 0 ) then {
         diag_log format["clusterHC: Furthest group is %1", str(_groupDistances select _furthestElement)];
 
         { // forEach (allGroups)
           if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
-              { if (!isPlayer _x) then {_x enableSimulation false; _x hideObject false;}; } forEach (units _x);
-              diag_log format["clusterHC: Group (%1) cached", groupID _x];
+              {
+                if (!isPlayer _x) then {
+                  _losBlocked = (!([_x, player] call _isLOS));
+                  waitUntil {!isNil "_losBlocked"};
+
+                  if (_losBlocked) then {
+                    diag_log format ["clusterHC: Caching unit %1", _x];
+                    _x enableSimulation false;
+                    _x hideObject false;
+                  } else {
+                    diag_log format ["clusterHC: _losBlocked = %1 :: Player can see unit %2", str(_losBlocked), _x];
+                  };
+              } forEach (units _x); };              
             
-            _groupDistances set [_furthestElement, ["", -1]];
+            _groupDistances set [_furthestElement, ["", 0]];
           };
         } forEach (allGroups);
       };
     };
     diag_log "clusterHC: Cache Complete";
-  };';
+  };
+';
 
 diag_log "clusterHC: Started";
 
 // Player clients
 if (!isServer && hasInterface) exitWith {
   waitUntil {!isNull player};
+  ["", "onEachFrame", _hintDebug] call BIS_fnc_addStackedEventHandler;
   [] spawn _enableAllSim;
   [] spawn _cacheCheckPlayer;
 };
@@ -101,33 +167,33 @@ _cacheCheckHC = compile '
   { _x enableSimulation true; _x hideObject false; } forEach (allUnits);
 
   while {diag_fps <= fpsLowerBound} do {
-    _groupDistances = [ ["", ["",-1]] ];
+    _groupDistances = [ ["", ["",0]] ];
 
     _numThisSimArray = count _thisSimArray;
-    for "_i" from 0 to _numThisSimArray step 1 do {
+    for "_i" from 0 to (_numThisSimArray - 1) step 1 do {
       _furthestElement = 0;
 
-      { _groupDistances = _groupDistances + [ [format["%1", _i], [groupID _x, ((_thisSimArray select _i) select 0) distance (_x select 0)]] ]; } forEach (allGroups);
+      { _groupDistances = _groupDistances + [ [format["%1", _i], [groupID _x, (getPosASL ((_thisSimArray select _i) select 0)) distance (getPosASL (_x select 0))]] ]; } forEach (allGroups);
 
       diag_log format["clusterHC: _groupDistances = %1", str(_groupDistances)];
       diag_log "clusterHC: Finding _furthestElement";
       
       _numGroupDistances = count _groupDistances;
-      for "_j" from 0 to _numGroupDistances step 1 do {
-        if ( ( ((_groupDistances select _j) select 1) select 1 ) != -1 ) then {
+      for "_j" from 0 to (_numGroupDistances - 1) step 1 do {
+        if ( ( ((_groupDistances select _j) select 1) select 1 ) != 0 ) then {
           if ( (((_groupDistances select _j) select 1) select 1) > (((_groupDistances select _furthestElement) select 1) select 1) ) then { _furthestElement = _j; };
         };
       };
 
       diag_log format["clusterHC: _furthestElement = %1", str(_groupDistances select _furthestElement)];
 
-      if ( (((_groupDistances select _furthestElement) select 1) select 1) != -1 ) then {
+      if ( (((_groupDistances select _furthestElement) select 1) select 1) != 0 ) then {
         diag_log format["clusterHC: Furthest group from %1 is %2", str(_thisSimArray select _i), str((_groupDistances select _furthestElement) select 1))];
 
         { // forEach (allGroups)
           if (groupID _x == ( ((_groupDistances select _furthestElement) select 1) select 0) ) exitWith {
             { _x enableSimulation false; _x hideObject false;} forEach (units _x);
-            _groupDistances set [_furthestElement, [format["%1", _i], ["", -1]]];
+            _groupDistances set [_furthestElement, [format["%1", _i], ["", 0]]];
 
             if (simulationEnabled ((units _x) select 0)) then { diag_log format["clusterHC: Group (%1) cached", groupID _x]; };          
           };
