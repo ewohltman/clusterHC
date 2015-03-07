@@ -117,8 +117,7 @@ _cacheCheckPlayer = {
                 waitUntil {!isNil "_hasClearLoS"};
 
                 if ( !(_hasClearLoS) ) then {
-                  _x enableSimulation false;
-                 
+                  _x enableSimulation false;                 
                 } else {
                   player reveal [_x, 4];
                 };
@@ -245,8 +244,8 @@ diag_log format["clusterHC: First pass will begin in %1 seconds", rebalanceTimer
 
 // Only HCs should run this infinite loop to re-enable simulations for AI that it owns
 if (!isServer && !hasInterface) exitWith {
-  [] spawn _enableAllSim;
-  [] spawn _cacheCheckHC;  
+  // [] spawn _enableAllSim;
+  // [] spawn _cacheCheckHC;
 };
 
 // Only the server should get to this part
