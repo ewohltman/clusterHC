@@ -38,7 +38,7 @@ _enableAllSim = {
   while {true} do {
     waitUntil {diag_fps >= fpsUpperThreshold};
     {
-      if (diag_fps > fpsLowerThreshold) then {{_x enableSimulation true; _x hideObject false;} forEach (units _x);};      
+      if (diag_fps > fpsLowerThreshold) then { {_x enableSimulation true;} forEach (units _x); };
     } forEach (allGroups);
   };
 };
@@ -109,9 +109,7 @@ _cacheCheckPlayer = {
       waitUntil {!isNil "_furthestElement"};
 
       if ( ((_groupDistances select _furthestElement) select 1) >= 0 ) then {
-        diag_log format["clusterHC: Furthest group is [%1] %2", str(side (group ((_groupDistances select _furthestElement) select 0) select 0)), str(_groupDistances select _furthestElement)];
-
-        { // forEach (allGroups)
+        {
           if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
             {
               if (!isPlayer _x) then {
@@ -120,7 +118,7 @@ _cacheCheckPlayer = {
 
                 if ( !(_hasClearLoS) ) then {
                   _x enableSimulation false;
-                  _x hideObject false;
+                 
                 } else {
                   player reveal [_x, 4];
                 };
@@ -151,22 +149,13 @@ if (!isServer && hasInterface) exitWith {
 
 // Server and Headless Clients Functions
 _cacheCheckHC = {
-  _thisSimArray = [];
-
-  switch (profileName) do {
-    case "HC": { _thisSimArray = HCSimArray; };
-    case "HC2": { _thisSimArray = HC2SimArray; };
-    case "HC3": { _thisSimArray = HC3SimArray; };
-    default {diag_log "clusterHC: [ERROR] HC Profile Name Not Recognized"; };
-  };
-
   _getGroupDistances = {
     _insideSimArray = _this;
-    _groupDistancesInside = [ ["", 0] ];
+    _groupDistancesInside = [ ["", -1] ];
     _numInsideSimArray = count _insideSimArray;
     for "_i" from 0 to _numInsideSimArray step 1 do {
       {        
-        _groupDistancesInside = _groupDistancesInside + [ [groupID _x, (getPosASL ((_insideSimArray select _i) select 0)) distance (getPosASL (leader _x))] ];
+        _groupDistancesInside = _groupDistancesInside + [ [groupID _x, (getPosASL (leader (_insideSimArray select _i))) distance (getPosASL (leader _x))] ];
       } forEach (allGroups);
     };
 
@@ -176,13 +165,13 @@ _cacheCheckHC = {
   _getFurthestElement = {
     _groupDistancesInside = _this;
     _furthestElementInside = 0;
-    _currentDistance = 0;
+    _currentDistance = -1;
     _numGroupDistances = count _groupDistancesInside;
     for "_i" from 0 to _numGroupDistances step 1 do {
       _currentDistance = ((_groupDistancesInside select _i) select 1);
-      if (isNil "_currentDistance") then { _currentDistance = 0; };
+      if (isNil "_currentDistance") then { _currentDistance = -1; };
       
-      if ( _currentDistance != 0 ) then {
+      if ( _currentDistance >= 0 ) then {
         if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
       };
     };
@@ -194,10 +183,18 @@ _cacheCheckHC = {
     waitUntil {diag_fps <= fpsLowerThreshold};
     diag_log "clusterHC: Cache Start";
 
-    while {diag_fps <= fpsLowerThreshold} do {
+    while {diag_fps <= fpsUpperThreshold} do {
+      _thisSimArray = [];
+
+      switch (profileName) do {
+        case "HC": { _thisSimArray = HCSimArray; };
+        case "HC2": { _thisSimArray = HC2SimArray; };
+        case "HC3": { _thisSimArray = HC3SimArray; };
+        default {diag_log "clusterHC: [ERROR] HC Profile Name Not Recognized"; };
+      };
+
       _numThisSimArray = count _thisSimArray;
-      _groupDistances = [_thisSimArray select 0] call _getGroupDistances;
-      waitUntil {!isNil "_groupDistances"};
+
       for "_i" from 0 to _numThisSimArray step 1 do {
         _groupDistances = [_thisSimArray select _i] call _getGroupDistances;
         waitUntil {!isNil "_groupDistances"};
@@ -205,33 +202,31 @@ _cacheCheckHC = {
         _furthestElement = _groupDistances call _getFurthestElement;
         waitUntil {!isNil "_furthestElement"};
 
-        if ( ((_groupDistances select _furthestElement) select 1) != 0 ) then {
-          diag_log format["clusterHC: Furthest group to %1 is %2", str((_thisSimArray select _i) select 0), str(_groupDistances select _furthestElement)];
+        if ( ((_groupDistances select _furthestElement) select 1) != -1 ) then {
+          diag_log format["clusterHC: Furthest group to %1 is %2", str(_thisSimArray select _i), str(_groupDistances select _furthestElement)];
 
-          { // forEach (allGroups)
-            if (groupID _x == ( ((_groupDistances select _furthestElement) select 1) select 0) ) exitWith {
-              { _x enableSimulation false; _x hideObject false; } forEach (units _x);
-              _groupDistances set [_furthestElement, ["", 0]];
+          {
+            if (!(_x in _thisSimArray)) then {
+              if (groupID _x == ((_groupDistances select _furthestElement) select 0) ) exitWith {
+                { if (!isPlayer _x) then { _x enableSimulation false;}; } forEach (units _x);
+                _groupDistances set [_furthestElement, ["", -1]];
 
-              if (simulationEnabled (leader _x)) then { diag_log format["clusterHC: Group (%1) cached", groupID _x]; };          
+                if (!simulationEnabled (leader _x)) then { diag_log format["clusterHC: Group (%1) cached", groupID _x]; };          
+              };
             };
           } forEach (allGroups);
         };
       };
 
-      { { _x enableSimulation true; _x hideObject false; } forEach (units (_x select 0)); } forEach (_thisSimArray);
+      { { _x enableSimulation true; } forEach (units _x); } forEach (_thisSimArray);
 
-      _cacheCount = 0;
-      { if (_x select 1 == 0) then { _cacheCount = _cacheCount + 1; }; } forEach (_groupDistances);
-      if ( _cacheCount == (count _groupDistances) ) then { diag_log "clusterHC: Recall _getGroupDistances"; _groupDistances = call _getGroupDistances; waitUntil {!isNil "_groupDistances"}; };
-    };
+      _numSimulating = 0;
+      { if (simulationEnabled _x) then { _numSimulating = _numSimulating + 1; }; } forEach (allUnits);   
 
-    diag_log "clusterHC: Cache Complete";
+      diag_log format ["clusterHC: [INFO] [%1] Currently simulating %2 entities on this HC", profileName, _numSimulating];
+  };
 
-    _numSimulating = 0;
-    { if (simulationEnabled _x) then { _numSimulating = _numSimulating + 1; }; } forEach (allUnits);   
-
-    diag_log format ["clusterHC: [INFO] [%1] Currently simulating %2 entities on this HC", profileName, _numSimulating];
+    diag_log "clusterHC: Cache Complete";    
   };
 };
 
@@ -251,7 +246,7 @@ diag_log format["clusterHC: First pass will begin in %1 seconds", rebalanceTimer
 // Only HCs should run this infinite loop to re-enable simulations for AI that it owns
 if (!isServer && !hasInterface) exitWith {
   [] spawn _enableAllSim;
-  [] spawn _cacheCheckHC;
+  [] spawn _cacheCheckHC;  
 };
 
 // Only the server should get to this part
@@ -279,12 +274,13 @@ while {true} do {
   // Spawn _cleanUp function in a seperate thread
   [] spawn _cleanUp;
 
+  { _x addMPEventHandler ["MPKilled", { (_this select 0) enableSimulation false; }]; } forEach (allUnits);
+  { _x addMPEventHandler ["Local", { if (_this select 1) then {(_this select 0) enableSimulation true;} }]; } forEach (allUnits);
+
   _numSimulating = 0;
 
   { if (simulationEnabled _x) then { _numSimulating = _numSimulating + 1; }; } forEach (allUnits);
   if (_numSimulating > 0) then { diag_log format ["clusterHC: [INFO] [Server] Currently simulating %1 entities", _numSimulating]; };
-  
-  { if (!isPlayer _x) then { _x enableSimulation false; _x hideObject false;}; } forEach (allUnits);
 
   // Do not enable load balancing unless more than one HC is present
   // Leave this variable false, we'll enable it automatically under the right conditions  
@@ -365,7 +361,7 @@ while {true} do {
     { if (isPlayer _x) then { _swap = false; }; } forEach (units _x);
 
     // Enable simulations for the duration of the AI pass
-    { _x enableSimulation true; _x hideObject false; } forEach (units _x);
+    { _x enableSimulation true; } forEach (units _x);
 
     // If load balance enabled, round robin between the HCs - else pass all to HC
     if ( _swap ) then {
@@ -388,7 +384,7 @@ while {true} do {
       };
 
       // Disable simulations for this group after the pass
-      { if (!isPlayer _x) then { _x enableSimulation false; _x hideObject false;}; } forEach (units _x);
+      { if (!isPlayer _x) then { _x enableSimulation false;}; } forEach (units _x);
 
       // If the transfer was successful, count it for accounting and diagnostic information
       if ( _rc ) then { _numTransfered = _numTransfered + 1; };
@@ -409,7 +405,7 @@ while {true} do {
       case _HC2_ID: { _HC2Sim = _HC2Sim + [_x]; _numHC2 = _numHC2 + 1; };
       case _HC3_ID: { _HC3Sim = _HC3Sim + [_x]; _numHC3 = _numHC3+ 1; };
       case 1;
-      case 2: { { _x enableSimulation true; _x hideObject false; } forEach (units _x); };
+      case 2: { { _x enableSimulation true; } forEach (units _x); };
     };
   } forEach (allGroups);
 
