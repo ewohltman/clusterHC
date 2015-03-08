@@ -6,229 +6,162 @@
 * In the mission init.sqf, spawn clusterHC.sqf with:
 * [] spawn compile preprocessFileLineNumbers "clusterHC.sqf"
 *
-* It seems that the dedicated server and headless client processes never use more than 20-22% CPU each.
+* It seems that the dedicated server anqd headless client processes never use more than 20-22% CPU each.
 * With a dedicated server and 3 headless clients, that's about 88% CPU with 10-12% left over.  Far more efficient use of your processing power.
 * 
-* _hasLoS function provided by:
-* SaOK - http://forums.bistudio.com/showthread.php?135252-Line-Of-Sight-(Example-Thread)&highlight=los
-* TPW MODS: http://forums.bistudio.com/showthread.php?164304-TPW-MODS-enhanced-realism-immersion-for-Arma-3-SP
+* hasLineOfSight function provided by:
+*   SaOK - http://forums.bistudio.com/showthread.php?135252-Line-Of-Sight-(Example-Thread)&highlight=los
+*   TPW MODS: http://forums.bistudio.com/showthread.php?164304-TPW-MODS-enhanced-realism-immersion-for-Arma-3-SP
 *
 */
 
 // These variables may be manipulated
-rebalanceTimer = 5;  // Rebalance sleep timer in seconds
+rebalanceTimer = 60;  // Rebalance sleep timer in seconds
 cleanUpThreshold = 5; // Threshold of number of dead bodies + destroyed vehicles before forcing a clean up
-fpsLowerThreshold = 30; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
-fpsUpperThreshold = 35; // Each Player's FPS threshold to trigger uncaching AI groups/units
+fpsThreshold = 20; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
 enableDebugDisplay = true; // Enable or disable showing real time debug information
 
-_hintDebug = {
-  _tmp = 0;
-  { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
-  hintSilent composeText [format ["FPS: %1", diag_fps], lineBreak,
-                          format ["FPSMin: %1", diag_fpsmin], lineBreak,
-                          format ["Number of Units: %1", count allUnits], lineBreak,
-                          format ["BLUFOR: %1", west countSide allUnits], lineBreak,
-                          format ["OPFOR: %1", east countSide allUnits], lineBreak,
-                          format ["CIV: %1", civilian countSide allUnits], lineBreak,
-                          format ["Cached: %1", _tmp]];
-};
-
-_enableAllSim = {
-  while {true} do {
-    waitUntil {diag_fps >= fpsUpperThreshold};
-    {
-      if (diag_fps > fpsLowerThreshold) then { {_x enableSimulation true;} forEach (units _x); };
-    } forEach (allGroups);
-  };
-};
-
-_cacheCheckPlayer = {
-  _getGroupDistances = {
-    _groupDistancesInside = [ ["", -1] ];
-
-    {
-      _tmpDistance = (getPosASL player) distance (getPosASL (leader _x));
-      if (isNil "_tmpDistance") then { _tmpDistance = -1; };
-      _groupDistancesInside = _groupDistancesInside + [ [groupID _x, _tmpDistance] ];
-    } forEach (allGroups);
-
-    _groupDistancesInside
-  };
-
-  _getFurthestElement = {
-    _groupDistancesInside = _this;
-    _furthestElementInside = 0;
-    _currentDistance = -1;
-    _numGroupDistances = count _groupDistancesInside;
-    for "_i" from 0 to _numGroupDistances step 1 do {
-      _currentDistance = ((_groupDistancesInside select _i) select 1);
-      if (isNil "_currentDistance") then { _currentDistance = -1; };
-      
-      if ( _currentDistance > 0 ) then {
-        if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
-      };
-    };
-
-    _furthestElementInside
-  };
-
-  _hasLoS = {      
-    _thePlayer = _this select 0;
-    _theUnit = _this select 1;
-    _eyeDV = eyeDirection _thePlayer;
-    _eyeD = ((_eyeDV select 0) atan2 (_eyeDV select 1));
-    _dirTo = [_thePlayer, _theUnit] call BIS_fnc_dirTo;
-    waitUntil {!isNil "_dirTo"};
-    _ang = abs (_dirTo - _eyeD);
-    _eyePlayer = eyePos _thePlayer;
-    _eyeUnit = eyePos _theUnit;    
-    _tInt = terrainIntersectASL [_eyePlayer, _eyeUnit];
-    _lInt = lineIntersects [_eyePlayer, _eyeUnit];
-
-    _rc = false;
-    if ( ((_ang > 120) && (_ang < 240)) && {!(_lInt) && !(_tInt)} ) then { _rc = true; };
-
-    _rc
-  };
-
-  while {true} do {
-    waitUntil {diag_fps <= fpsLowerThreshold};
-    diag_log "clusterHC: Cache Start";
-
-    _groupDistances = call _getGroupDistances;
-    waitUntil {!isNil "_groupDistances"};
-
-    while {diag_fps <= fpsUpperThreshold} do {
-      _cacheCount = 0;
-      { if (_x select 1 == -1) then { _cacheCount = _cacheCount + 1; }; } forEach (_groupDistances);
-      
-      if ( _cacheCount == ((count _groupDistances) - 1)) then { _groupDistances = call _getGroupDistances; waitUntil {!isNil "_groupDistances"}; };
-
-      _furthestElement = _groupDistances call _getFurthestElement;
-      waitUntil {!isNil "_furthestElement"};
-
-      if ( ((_groupDistances select _furthestElement) select 1) >= 0 ) then {
-        {
-          if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
-            {
-              if (!isPlayer _x) then {
-                _hasClearLoS = [player, _x] call _hasLoS;
-                waitUntil {!isNil "_hasClearLoS"};
-
-                if ( !(_hasClearLoS) ) then {
-                  _x enableSimulation false;                 
-                } else {
-                  player reveal [_x, 4];
-                };
-              };
-            } forEach (units _x);
-
-            _groupDistances set [_furthestElement, ["", -1]];
-          };
-        } forEach (allGroups);
-      };
-    };
-
-    diag_log "clusterHC: Cache Complete";
-  };  
-};
-
 diag_log "clusterHC: Started";
+
+///////////////////////// START PLAYER CODE /////////////////////////
+diagPanel = {
+  _panel = {
+    _tmp = 0;
+    { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
+    hintSilent composeText [parseText "<t align='center'><t font='EtelkaMonospaceProBold'><t size='1.5'><t color='#CC0000'><t underline='true'>clusterHC</t></t></t><br/><t size='1.0'>Diagnostic Panel</t></t></t><br/>", lineBreak,
+                            format ["FPS: %1", diag_fps], lineBreak,
+                            format ["FPSMin: %1", diag_fps], lineBreak,
+                            format ["Number of Units: %1", count allUnits], lineBreak,
+                            format ["BLUFOR: %1", west countSide allUnits], lineBreak,
+                            format ["OPFOR: %1", east countSide allUnits], lineBreak,
+                            format ["CIV: %1", civilian countSide allUnits], lineBreak,
+                            format ["Cached: %1", _tmp]];
+  };
+
+  while {true} do { _indexEH = addMissionEventHandler ["Draw3D", _panel]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; };
+};
+
+simUnits = {  
+  _enableSim = {
+    if (diag_fps >= fpsThreshold) then {    
+      { { if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; }; } forEach (units _x); } forEach (allGroups);
+    };
+  };
+
+  // while {true} do { _indexEH = addMissionEventHandler ["Draw3D", _enableSim]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; };
+  while {true} do { ["clusterHC_EHcleanUp", "onEachFrame", _enableSim] spawn BIS_fnc_addStackedEventHandler; sleep 1; ["clusterHC_EHcleanUp", "onEachFrame"] spawn BIS_fnc_removeStackedEventHandler; };    
+};
+
+getGroupDistances = {
+  private ["_groupDistancesInside"];
+  _groupDistancesInside = [ ["", -1] ];
+
+  {
+    private ["_groupLeader", "_currentUnit", "_tmpDistance"];
+    _groupLeader = leader _x;
+    if ((typeName (_this select 0)) == "GROUP") then { _currentUnit = leader (_this select 0); };
+    if (isNil "_currentUnit") then { _currentUnit = player };
+    _tmpDistance = (getPosASL _currentUnit) distance (getPosASL _groupLeader);
+    if (isNil "_tmpDistance") then { _tmpDistance = -1; };
+    _groupDistancesInside = _groupDistancesInside + [ [groupID _x, _tmpDistance] ];
+  } forEach (allGroups);
+
+  _groupDistancesInside
+};
+
+getFurthestElement = {
+  private ["_groupDistancesInside", "_furthestElementInside", "_currentDistance", "_numGroupDistances"];
+  _groupDistancesInside = _this;
+  _furthestElementInside = 0;
+  _currentDistance = -1;
+  _numGroupDistances = count _groupDistancesInside;
+  for "_i" from 0 to _numGroupDistances step 1 do {
+    _currentDistance = ((_groupDistancesInside select _i) select 1);
+    if (isNil "_currentDistance") then { _currentDistance = -1; };
+    
+    if ( _currentDistance > 0 ) then {
+      if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
+    };
+  };
+
+  _furthestElementInside
+};
+
+hasLineOfSight = {
+  private ["_thePlayer", "_theUnit", "_eyeDV", "_eyeD", "_dirTo", "_ang", "_eyePlayer", "_eyeUnit", "_tInt", "_lInt", "_rc"];
+  _thePlayer = _this select 0;
+  _theUnit = _this select 1;
+  _eyeDV = eyeDirection _thePlayer;
+  _eyeD = ((_eyeDV select 0) atan2 (_eyeDV select 1));
+  _dirTo = [_thePlayer, _theUnit] call BIS_fnc_dirTo;
+  waitUntil {!isNil "_dirTo"};
+  _ang = abs (_dirTo - _eyeD);
+  _eyePlayer = eyePos _thePlayer;
+  _eyeUnit = eyePos _theUnit;
+  _tInt = terrainIntersectASL [_eyePlayer, _eyeUnit];
+  _lInt = lineIntersects [_eyePlayer, _eyeUnit];
+
+  _rc = false;
+  if ( ((_ang > 120) && (_ang < 240)) && {!(_lInt) && !(_tInt)} ) then { _rc = true; };
+
+  _rc
+};
+
+cacheUnits = {
+  private ["_groupDistances"];
+  waitUntil {diag_fps <= fpsThreshold};
+  _groupDistances = call getGroupDistances;
+  waitUntil {!isNil "_groupDistances"};
+
+  while {true} do {
+    waitUntil {diag_fps <= fpsThreshold};
+
+    private ["_cacheCount", "_furthestElement"];
+    _cacheCount = 0;
+    { if (_x select 1 == -1) then { _cacheCount = _cacheCount + 1; }; } forEach (_groupDistances);
+    
+    if ( _cacheCount == ((count _groupDistances) - 1)) then { _groupDistances = call getGroupDistances; waitUntil {!isNil "_groupDistances"}; };
+
+    _furthestElement = _groupDistances call getFurthestElement;
+    waitUntil {!isNil "_furthestElement"};
+
+    if ( ((_groupDistances select _furthestElement) select 1) >= 0 ) then {
+      {
+        if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
+          {
+            if (!isPlayer _x) then {
+              private ["_hasClearLoS"];
+              _hasClearLoS = [player, _x] call hasLineOfSight;
+              waitUntil {!isNil "_hasClearLoS"};
+
+              if ( !(_hasClearLoS) ) then {
+                if (simulationEnabled _x) then { _x enableSimulation false; };
+              } else {
+                if (!simulationEnabled _x) then { _x enableSimulation true; };
+              };
+            };
+          } forEach (units _x);
+
+          _groupDistances set [_furthestElement, ["", -1]];
+        };
+      } forEach (allGroups);
+    };
+  };
+};
 
 // Player clients
 if (!isServer && hasInterface) exitWith {
   waitUntil {!isNull player};
 
-  if (enableDebugDisplay) then { ["", "onEachFrame", _hintDebug] spawn BIS_fnc_addStackedEventHandler; };
+  systemChat "Powered by clusterHC";
 
-  [] spawn _enableAllSim;
-  [] spawn _cacheCheckPlayer;
+  if (enableDebugDisplay) then { [] spawn diagPanel; };
+  [] spawn simUnits;
+  [] spawn cacheUnits;
 };
+///////////////////////// END PLAYER CODE /////////////////////////
 
-// Server and Headless Clients Functions
-_cacheCheckHC = {
-  _getGroupDistances = {
-    _insideSimArray = _this;
-    _groupDistancesInside = [ ["", -1] ];
-    _numInsideSimArray = count _insideSimArray;
-    for "_i" from 0 to _numInsideSimArray step 1 do {
-      {        
-        _groupDistancesInside = _groupDistancesInside + [ [groupID _x, (getPosASL (leader (_insideSimArray select _i))) distance (getPosASL (leader _x))] ];
-      } forEach (allGroups);
-    };
-
-    _groupDistancesInside
-  };
-
-  _getFurthestElement = {
-    _groupDistancesInside = _this;
-    _furthestElementInside = 0;
-    _currentDistance = -1;
-    _numGroupDistances = count _groupDistancesInside;
-    for "_i" from 0 to _numGroupDistances step 1 do {
-      _currentDistance = ((_groupDistancesInside select _i) select 1);
-      if (isNil "_currentDistance") then { _currentDistance = -1; };
-      
-      if ( _currentDistance >= 0 ) then {
-        if ( ((_groupDistancesInside select _i) select 1) > ((_groupDistancesInside select _furthestElementInside) select 1) ) then { _furthestElementInside = _i; };
-      };
-    };
-
-    _furthestElementInside
-  };
-
-  while {true} do {
-    waitUntil {diag_fps <= fpsLowerThreshold};
-    diag_log "clusterHC: Cache Start";
-
-    while {diag_fps <= fpsUpperThreshold} do {
-      _thisSimArray = [];
-
-      switch (profileName) do {
-        case "HC": { _thisSimArray = HCSimArray; };
-        case "HC2": { _thisSimArray = HC2SimArray; };
-        case "HC3": { _thisSimArray = HC3SimArray; };
-        default {diag_log "clusterHC: [ERROR] HC Profile Name Not Recognized"; };
-      };
-
-      _numThisSimArray = count _thisSimArray;
-
-      for "_i" from 0 to _numThisSimArray step 1 do {
-        _groupDistances = [_thisSimArray select _i] call _getGroupDistances;
-        waitUntil {!isNil "_groupDistances"};
-
-        _furthestElement = _groupDistances call _getFurthestElement;
-        waitUntil {!isNil "_furthestElement"};
-
-        if ( ((_groupDistances select _furthestElement) select 1) != -1 ) then {
-          diag_log format["clusterHC: Furthest group to %1 is %2", str(_thisSimArray select _i), str(_groupDistances select _furthestElement)];
-
-          {
-            if (!(_x in _thisSimArray)) then {
-              if (groupID _x == ((_groupDistances select _furthestElement) select 0) ) exitWith {
-                { if (!isPlayer _x) then { _x enableSimulation false;}; } forEach (units _x);
-                _groupDistances set [_furthestElement, ["", -1]];
-
-                if (!simulationEnabled (leader _x)) then { diag_log format["clusterHC: Group (%1) cached", groupID _x]; };          
-              };
-            };
-          } forEach (allGroups);
-        };
-      };
-
-      { { _x enableSimulation true; } forEach (units _x); } forEach (_thisSimArray);
-
-      _numSimulating = 0;
-      { if (simulationEnabled _x) then { _numSimulating = _numSimulating + 1; }; } forEach (allUnits);   
-
-      diag_log format ["clusterHC: [INFO] [%1] Currently simulating %2 entities on this HC", profileName, _numSimulating];
-  };
-
-    diag_log "clusterHC: Cache Complete";    
-  };
-};
-
+///////////////////////// START SERVER/HC CODE /////////////////////////
 waitUntil {!isNil "HC"};
 waitUntil {!isNull HC};
 
@@ -240,21 +173,75 @@ HCSimArray = []; // Will become an array of groups HC owns. Server broadcasts th
 HC2SimArray = []; // Will become an array of groups HC2 owns. Server broadcasts this to HC2 for simulations
 HC3SimArray = []; // Will become an array of groups HC3 owns. Server broadcasts this to HC3 for simulations
 
-diag_log format["clusterHC: First pass will begin in %1 seconds", rebalanceTimer];
+cacheUnitsHC = {
+  waitUntil {diag_fps <= fpsThreshold};
+  while {true} do {
+    waitUntil {diag_fps <= fpsThreshold};
+
+    private ["_thisSimArray", "_numThisSimArray"];
+
+    switch (profileName) do {
+      case "HC": { _thisSimArray = HCSimArray; };
+      case "HC2": { _thisSimArray = HC2SimArray; };
+      case "HC3": { _thisSimArray = HC3SimArray; };
+      default {diag_log "clusterHC: [ERROR] HC Profile Name Not Recognized"; _thisSimArray = []; };
+    };
+
+    _numThisSimArray = count _thisSimArray;
+    for "_i" from 0 to _numThisSimArray step 1 do {
+      private ["_groupDistances", "_furthestElement", "_currentLeader"];
+      _groupDistances = [_thisSimArray select _i] call getGroupDistances;
+      waitUntil {!isNil "_groupDistances"};
+
+      _furthestElement = _groupDistances call getFurthestElement;
+      waitUntil {!isNil "_furthestElement"};
+
+      _currentLeader = leader (_thisSimArray select _i);
+      if (!isNil "_currentLeader") then {
+        if ( ((_groupDistances select _furthestElement) select 1) >= 0 ) then {
+          {
+            if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
+              {
+                if (!isPlayer _x) then {
+                  private ["_hasClearLoS"];
+                  _hasClearLoS = [_currentLeader, _x] call hasLineOfSight;
+                  waitUntil {!isNil "_hasClearLoS"};
+
+                  if ( !(_hasClearLoS) ) then {
+                    if (simulationEnabled _x) then { _x enableSimulation false; };
+                  } else {
+                    if (!simulationEnabled _x) then { _x enableSimulation true; };
+                  };
+                };
+              } forEach (units _x);
+
+              _groupDistances set [_furthestElement, ["", -1]];
+            };
+          } forEach (allGroups);
+        };
+      };
+    };
+  };
+};
+
+// diag_log format["clusterHC: First pass will begin in %1 seconds", rebalanceTimer];
+
+{ if (!isPlayer _x) then { _x enableSimulation false; }; } forEach (allUnits);
 
 // Only HCs should run this infinite loop to re-enable simulations for AI that it owns
 if (!isServer && !hasInterface) exitWith {
-  // [] spawn _enableAllSim;
-  // [] spawn _cacheCheckHC;
+  [] spawn simUnits;
+  [] spawn cacheUnitsHC;
 };
+///////////////////////// END SERVER/HC CODE /////////////////////////
 
-// Only the server should get to this part
-
-// Function _cleanUp
-// Example: [] spawn _cleanUp;
-_cleanUp = {
+///////////////////////// START SERVER ONLY CODE /////////////////////////
+// Function cleanUp
+// Example: [] spawn cleanUp;
+cleanUp = {
   // Force clean up dead bodies and destroyed vehicles
   if (count allDead > cleanUpThreshold) then {
+    private ["_numDeleted"];    
     _numDeleted = 0;
     {
       deleteVehicle _x;
@@ -266,23 +253,24 @@ _cleanUp = {
   };
 };
 
+// Spawn cleanUp function in a seperate thread
+["clusterHC_EHcleanUp", "onEachFrame", cleanUp] spawn BIS_fnc_addStackedEventHandler;
+
 while {true} do {
+  { if (!isPlayer _x) then { _x enableSimulation false; }; } forEach (allUnits);
+
   // Rebalance every rebalanceTimer seconds to avoid hammering the server
   sleep rebalanceTimer;
-
-  // Spawn _cleanUp function in a seperate thread
-  [] spawn _cleanUp;
 
   { _x addMPEventHandler ["MPKilled", { (_this select 0) enableSimulation false; }]; } forEach (allUnits);
   { _x addMPEventHandler ["Local", { if (_this select 1) then {(_this select 0) enableSimulation true;} }]; } forEach (allUnits);
 
-  _numSimulating = 0;
-
-  { if (simulationEnabled _x) then { _numSimulating = _numSimulating + 1; }; } forEach (allUnits);
-  if (_numSimulating > 0) then { diag_log format ["clusterHC: [INFO] [Server] Currently simulating %1 entities", _numSimulating]; };
+  // _numSimulating = 0;
+  // { if (simulationEnabled _x) then { _numSimulating = _numSimulating + 1; }; } forEach (allUnits);
+  // if (_numSimulating > 0) then { diag_log format ["clusterHC: [INFO] [Server] Currently simulating %1 entities", _numSimulating]; };
 
   // Do not enable load balancing unless more than one HC is present
-  // Leave this variable false, we'll enable it automatically under the right conditions  
+  // Leave this variable false, we'll enable it automatically under the right conditions
   _loadBalance = false;
 
    // Get HC Client ID else set variables to null
@@ -290,7 +278,7 @@ while {true} do {
     _HC_ID = owner HC;
 
     if (_HC_ID > 2) then {
-      diag_log format ["clusterHC: Found HC with Client ID %1", _HC_ID];
+      // diag_log format ["clusterHC: Found HC with Client ID %1", _HC_ID];
     } else { 
       diag_log "clusterHC: [WARN] HC disconnected";
 
@@ -305,7 +293,7 @@ while {true} do {
       _HC2_ID = owner HC2;
 
       if (_HC2_ID > 2) then {
-        diag_log format ["clusterHC: Found HC2 with Client ID %1", _HC2_ID];
+        // diag_log format ["clusterHC: Found HC2 with Client ID %1", _HC2_ID];
       } else { 
         diag_log "clusterHC: [WARN] HC2 disconnected";
         
@@ -321,7 +309,7 @@ while {true} do {
       _HC3_ID = owner HC3;
 
       if (_HC3_ID > 2) then {
-        diag_log format ["clusterHC: Found HC3 with Client ID %1", _HC3_ID];
+        // diag_log format ["clusterHC: Found HC3 with Client ID %1", _HC3_ID];
       } else { 
         diag_log "clusterHC: [WARN] HC3 disconnected";
         
@@ -332,24 +320,26 @@ while {true} do {
   };
 
   // If no HCs present, wait for HC to rejoin
-  if ( (isNull HC) && (isNull HC2) && (isNull HC3) ) then { waitUntil {!isNull HC}; };  
+  if ( (isNull HC) && (isNull HC2) && (isNull HC3) ) then { waitUntil {!isNull HC}; };
   
   // Check to auto enable Round-Robin load balancing strategy
   if ( (!isNull HC && !isNull HC2) || (!isNull HC && !isNull HC3) || (!isNull HC2 && !isNull HC3) ) then { _loadBalance = true; };
   
+  /*
   if ( _loadBalance ) then {
-    diag_log "clusterHC: Starting load-balanced transfer of AI groups to HCs";    
+    diag_log "clusterHC: Starting load-balanced transfer of AI groups to HCs";
   } else {
     // No load balancing
     diag_log "clusterHC: Starting transfer of AI groups to HC";
   };
+  */
 
   // Determine first HC to start with
   _currentHC = 0;
 
   if (!isNull HC) then { _currentHC = 1; } else { 
     if (!isNull HC2) then { _currentHC = 2; } else { _currentHC = 3; };
-  };  
+  };
 
   // Pass the AI
   _numTransfered = 0;
@@ -360,7 +350,7 @@ while {true} do {
     { if (isPlayer _x) then { _swap = false; }; } forEach (units _x);
 
     // Enable simulations for the duration of the AI pass
-    { _x enableSimulation true; } forEach (units _x);
+    // { _x enableSimulation true; } forEach (units _x);
 
     // If load balance enabled, round robin between the HCs - else pass all to HC
     if ( _swap ) then {
@@ -383,7 +373,7 @@ while {true} do {
       };
 
       // Disable simulations for this group after the pass
-      { if (!isPlayer _x) then { _x enableSimulation false;}; } forEach (units _x);
+      // { if (!isPlayer _x) then { _x enableSimulation false; }; } forEach (units _x);
 
       // If the transfer was successful, count it for accounting and diagnostic information
       if ( _rc ) then { _numTransfered = _numTransfered + 1; };
@@ -415,13 +405,13 @@ while {true} do {
   if (_numTransfered > 0) then {
     // More accounting/diagnostic information
     diag_log format ["clusterHC: Transfered %1 AI groups to HC(s)", _numTransfered];
-
-    if (_numHC > 0) then { diag_log format ["clusterHC: %1 AI groups currently on HC", _numHC]; };
-    if (_numHC2 > 0) then { diag_log format ["clusterHC: %1 AI groups currently on HC2", _numHC2]; };
-    if (_numHC3 > 0) then { diag_log format ["clusterHC: %1 AI groups currently on HC3", _numHC3]; };
+    // if (_numHC > 0) then { diag_log format ["clusterHC: %1 AI groups currently on HC", _numHC]; };
+    // if (_numHC2 > 0) then { diag_log format ["clusterHC: %1 AI groups currently on HC2", _numHC2]; };
+    // if (_numHC3 > 0) then { diag_log format ["clusterHC: %1 AI groups currently on HC3", _numHC3]; };
   } else {
-    diag_log "clusterHC: No rebalance or transfers required this round";
+    // diag_log "clusterHC: No rebalance or transfers required this round";
   };
 
-  diag_log format ["clusterHC: %1 AI groups total across all HC(s)", (_numHC + _numHC2 + _numHC3)];  
+  // diag_log format ["clusterHC: %1 AI groups total across all HC(s)", (_numHC + _numHC2 + _numHC3)];
 };
+///////////////////////// END SERVER ONLY CODE /////////////////////////
