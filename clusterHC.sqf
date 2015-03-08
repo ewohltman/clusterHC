@@ -18,13 +18,14 @@
 // These variables may be manipulated
 rebalanceTimer = 60;  // Rebalance sleep timer in seconds
 cleanUpThreshold = 5; // Threshold of number of dead bodies + destroyed vehicles before forcing a clean up
-fpsThreshold = 20; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
-enableDebugDisplay = true; // Enable or disable showing real time debug information
+fpsThreshold = 25; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
+enableDiagPanel = true; // Enable or disable showing real time debug information
 
 diag_log "clusterHC: Started";
 
 ///////////////////////// START PLAYER CODE /////////////////////////
 diagPanel = {
+  private ["_panel", "_tmp"];
   _panel = {
     _tmp = 0;
     { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
@@ -38,10 +39,10 @@ diagPanel = {
                             format ["Cached: %1", _tmp]];
   };
 
-  while {true} do { _indexEH = addMissionEventHandler ["Draw3D", _panel]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; };
+  while {true} do { if (enableDiagPanel) then { _indexEH = addMissionEventHandler ["Draw3D", _panel]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; } else {hint ""; waitUntil{enableDiagPanel};}; };
 };
 
-simUnits = {  
+simUnits = {
   _enableSim = {
     if (diag_fps >= fpsThreshold) then {    
       { { if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; }; } forEach (units _x); } forEach (allGroups);
@@ -155,7 +156,7 @@ if (!isServer && hasInterface) exitWith {
 
   systemChat "Powered by clusterHC";
 
-  if (enableDebugDisplay) then { [] spawn diagPanel; };
+  [] spawn diagPanel;
   [] spawn simUnits;
   [] spawn cacheUnits;
 };
@@ -381,7 +382,7 @@ while {true} do {
   } forEach (allGroups);
 
   // Divide up AI to delegate to HC(s)
-  _numHC = 0;
+  _numHC = 0;s
   _numHC2 = 0;
   _numHC3 = 0;
   _HCSim = [];
