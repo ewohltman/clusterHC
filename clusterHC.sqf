@@ -7,7 +7,8 @@
 * [] spawn compile preprocessFileLineNumbers "clusterHC.sqf"
 *
 * It seems that the dedicated server anqd headless client processes never use more than 20-22% CPU each.
-* With a dedicated server and 3 headless clients, that's about 88% CPU with 10-12% left over.  Far more efficient use of your processing power.
+* With a dedicated server and 3 headless clients, that's about 88% CPU with 10-12% left over.
+* Far more efficient use of your processing power.
 * 
 * hasLineOfSight function provided by:
 *   SaOK - http://forums.bistudio.com/showthread.php?135252-Line-Of-Sight-(Example-Thread)&highlight=los
@@ -17,52 +18,17 @@
 
 // These variables may be manipulated
 rebalanceTimer = 60;  // Rebalance sleep timer in seconds
-cleanUpThreshold = 5; // Threshold of number of dead bodies + destroyed vehicles before forcing a clean up
-fpsThreshold = 25; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
-maxDistance = 0; // Set to 0 for no maximum distance (technically, defaults to 20km)
+corpseDecayTimer = (rebalanceTimer - 1); // Corpse decay timer in seconds, must be less than rebalanceTimer
+fpsThreshold = 15; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
+maxDistance = 0; // Set to 0 for no maximum distance of uncaching (technically, defaults to 30km)
 enableDiagPanel = true; // Enable or disable showing real time debug information
 
 diag_log "clusterHC: Started";
 private ["_diagPanel", "_simUnits", "_cacheUnits"];
 
-///////////////////////// START PLAYER CODE /////////////////////////
-_diagPanel = {
-  private ["_panel", "_tmp"];
-  _panel = {
-    _tmp = 0;
-    { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
-    hintSilent composeText [parseText "<t align='center'><t font='EtelkaMonospaceProBold'><t size='1.5'><t color='#CC0000'><t underline='true'>clusterHC</t></t></t><br/><t size='1.0'>Diagnostic Panel</t></t></t><br/>", lineBreak,
-                            format ["FPS: %1", diag_fps], lineBreak,
-                            format ["FPSMin: %1", diag_fps], lineBreak,
-                            format ["Number of Units: %1", count allUnits], lineBreak,
-                            format ["BLUFOR: %1", west countSide allUnits], lineBreak,
-                            format ["OPFOR: %1", east countSide allUnits], lineBreak,
-                            format ["CIV: %1", civilian countSide allUnits], lineBreak,
-                            format ["Cached: %1", _tmp]];
-  };
-  while {true} do { if (enableDiagPanel) then { _indexEH = addMissionEventHandler ["Draw3D", _panel]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; } else {hint ""; waitUntil{enableDiagPanel};}; };
-};
-
-_simUnits = {
-  _enableSim = {
-    if (diag_fps >= fpsThreshold) then {
-      if (maxDistance == 0) then { maxDistance = 20000; };
-      // { { if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; }; } forEach (units _x); } forEach (allGroups);
-      {
-        if (diag_fps >= fpsThreshold) then {
-          if (typeName _x != "OBJECT") then {diag_log format ["clusterHC: _simUnits - typeName _x == %1", typeName _x];};
-          if (typeName _x == "TEAM_MEMBER") then {_x = agent _x;};
-          if (!simulationEnabled _x) then { _x enableSimulation true; }; };
-      } forEach (player nearEntities maxDistance);
-    };
-  };
-  // while {true} do { _indexEH = addMissionEventHandler ["Draw3D", _enableSim]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; };
-  while {true} do { ["clusterHC_EH_cleanUp", "onEachFrame", _enableSim] spawn BIS_fnc_addStackedEventHandler; sleep 1; ["clusterHC_EH_cleanUp", "onEachFrame"] spawn BIS_fnc_removeStackedEventHandler; };    
-};
-
 getGroupDistances = {
   private ["_groupDistancesInside"];
-  _groupDistancesInside = [ ["", -1] ];
+  _groupDistancesInside = [ [(allGroups select 0), -1] ];
 
   {
     private ["_groupLeader", "_currentUnit", "_tmpDistance"];
@@ -71,7 +37,7 @@ getGroupDistances = {
     if (isNil "_currentUnit") then { _currentUnit = player };
     _tmpDistance = (getPosASL _currentUnit) distance (getPosASL _groupLeader);
     if (isNil "_tmpDistance") then { _tmpDistance = -1; };
-    _groupDistancesInside = _groupDistancesInside + [ [groupID _x, _tmpDistance] ];
+    _groupDistancesInside = _groupDistancesInside + [ [_x, _tmpDistance] ];
   } forEach (allGroups);
 
   _groupDistancesInside
@@ -115,6 +81,47 @@ hasLineOfSight = {
   _rc
 };
 
+_simUnits = {
+  _enableSim = {
+    if (diag_fps >= fpsThreshold) then {
+      if (!isServer && !hasInterface) exitWith {
+        {
+          if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; };
+        } forEach (allUnits);
+      };
+      _tmpFPS = diag_fps;
+      _scaleMaxDistance = maxDistance; // FPS > 30
+      if (_tmpFPS <= 30) then {_scaleMaxDistance = 300;}; // FPS 20 - 30
+      if (_tmpFPS <= 20) then {_scaleMaxDistance = 100;}; // FPS 10 - 20
+      if (_tmpFPS <= 10) then {_scaleMaxDistance = 25;}; // FPS 0 - 10
+      if (_scaleMaxDistance == 0) then { _scaleMaxDistance = 30000; };
+      {
+        if (diag_fps >= fpsThreshold) then {
+          if (!simulationEnabled _x) then { _x enableSimulation true; }; };
+      } forEach ((position player) nearEntities _scaleMaxDistance);
+    };
+  };
+  while {true} do { ["clusterHC_EH_cleanUp", "onEachFrame", _enableSim] spawn BIS_fnc_addStackedEventHandler; sleep 1; ["clusterHC_EH_cleanUp", "onEachFrame"] spawn BIS_fnc_removeStackedEventHandler; };    
+};
+
+///////////////////////// START PLAYER CODE /////////////////////////
+_diagPanel = {
+  private ["_panel", "_tmp"];
+  _panel = {
+    _tmp = 0;
+    { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
+    hintSilent composeText [parseText "<t align='center'><t font='EtelkaMonospaceProBold'><t size='1.5'><t color='#CC0000'><t underline='true'>clusterHC</t></t></t><br/><t size='1.0'>Diagnostic Panel</t></t></t><br/>", lineBreak,
+                            format ["FPS: %1", diag_fps], lineBreak,
+                            format ["FPSMin: %1", diag_fps], lineBreak,
+                            format ["Number of Units: %1", count allUnits], lineBreak,
+                            format ["BLUFOR: %1", west countSide allUnits], lineBreak,
+                            format ["OPFOR: %1", east countSide allUnits], lineBreak,
+                            format ["CIV: %1", civilian countSide allUnits], lineBreak,
+                            format ["Cached: %1", _tmp]];
+  };
+  while {true} do { if (enableDiagPanel) then { _indexEH = addMissionEventHandler ["Draw3D", _panel]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; } else {hint ""; waitUntil{enableDiagPanel};}; };
+};
+
 _cacheUnits = {
   private ["_getGroupDistances", "_getFurthestElement", "_hasLineOfSight", "_groupDistances", "_cacheCount", "_furthestElement", "_hasClearLoS"];
   _getGroupDistances = getGroupDistances;
@@ -139,20 +146,17 @@ _cacheUnits = {
 
     if ( ((_groupDistances select _furthestElement) select 1) >= 0 ) then {
       {
-        if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
+        if (_x == (_groupDistances select _furthestElement) select 0) then {
           {
             if (!isPlayer _x) then {
-              // if (typeName _x != "OBJECT") then {diag_log format ["clusterHC: _cacheUnits - typeName _x == %1", typeName _x];};
-              // if (typeName _x == "TEAM_MEMBER") then {_x = agent _x;};
               _hasClearLoS = [player, _x] call _hasLineOfSight;
               waitUntil {!isNil "_hasClearLoS"};
 
               if ( !(_hasClearLoS) ) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
-              // else { if (!simulationEnabled _x) then { _x enableSimulation true; }; };
             };
           } forEach (units _x);
 
-          _groupDistances set [_furthestElement, ["", -1]];
+          _groupDistances set [_furthestElement, [(allGroups select 0), -1]];
         };
       } forEach (allGroups);
     };
@@ -218,21 +222,18 @@ _cacheUnitsHC = {
       if (!isNil "_currentLeader") then {
         if ( ((_groupDistances select _furthestElement) select 1) >= 0 ) then {
           {
-            if (groupID _x == (_groupDistances select _furthestElement) select 0) then {
+            if (_x == (_groupDistances select _furthestElement) select 0) then {
               {
                 if (!isPlayer _x) then {
-                  // if (typeName _x != "OBJECT") then {diag_log format ["clusterHC: _cacheUnitsHC - typeName _x == %1", typeName _x];};
-                  // if (typeName _x == "TEAM_MEMBER") then {_x = agent _x;};
                   private ["_hasClearLoS"];
                   _hasClearLoS = [_currentLeader, _x] call _hasLineOfSight;
                   waitUntil {!isNil "_hasClearLoS"};
 
                   if ( !(_hasClearLoS) ) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
-                  // else { if (!simulationEnabled _x) then { _x enableSimulation true; }; };
                 };
               } forEach (units _x);
 
-              _groupDistances set [_furthestElement, ["", -1]];
+              _groupDistances set [_furthestElement, [(allGroups select 0), -1]];
             };
           } forEach (allGroups);
         };
@@ -241,9 +242,7 @@ _cacheUnitsHC = {
   };
 };
 
-// diag_log format["clusterHC: First pass will begin in %1 seconds", rebalanceTimer];
-
-// Only HCs should run this infinite loop to re-enable simulations for AI that it owns
+// Only HCs should run this
 if (!isServer && !hasInterface) exitWith {
   [] spawn _simUnits;
   [] spawn _cacheUnitsHC;
@@ -251,29 +250,19 @@ if (!isServer && !hasInterface) exitWith {
 ///////////////////////// END SERVER/HC CODE /////////////////////////
 
 ///////////////////////// START SERVER ONLY CODE /////////////////////////
-// Function _cleanUp
-// Example: [] spawn _cleanUp;
-private "_cleanUp";
-_cleanUp = {
-  // Force clean up dead bodies and destroyed vehicles
-  if (count allDead > cleanUpThreshold) then {
-    private ["_numDeleted"];    
-    _numDeleted = 0;
-    {
-      deleteVehicle _x;
-
-      _numDeleted = _numDeleted + 1;
-    } forEach (allDead);
-
-    // diag_log format ["clusterHC: Cleaned up %1 dead bodies/destroyed vehicles", _numDeleted];
-  };
-};
-
-// Spawn _cleanUp function in a seperate thread
-["clusterHC_EH_cleanUp", "onEachFrame", _cleanUp] spawn BIS_fnc_addStackedEventHandler;
-
 _indexEHMPKilledArray = [ [(allUnits select 0), -1] ];
 _indexEHLocalArray = [ [(allUnits select 0), -1] ];
+
+_mpKilledEHCode = {
+  [_this select 0] spawn {
+    sleep 3;
+    (_this select 0) enableSimulation false;
+    if (isServer) then {
+      sleep corpseDecayTimer;
+      deleteVehicle (_this select 0);
+    };
+  };
+};
 
 while {true} do {
   { if (!isPlayer _x) then { _x enableSimulation false; }; } forEach (allUnits);
@@ -281,14 +270,13 @@ while {true} do {
   // Rebalance every rebalanceTimer seconds to avoid hammering the server
   sleep rebalanceTimer;
 
-  // if (count (_indexEHMPKilledArray select 1) > 2) then { { (_x select 0) removeMPEventHandler ["MPKilled", (_x select 1)]; } forEach (_indexEHMPKilledArray); };
   if (count _indexEHMPKilledArray > 1) then { { if (_forEachIndex > 0) then { (_x select 0) removeMPEventHandler ["MPKilled", (_x select 1)]; }; } forEach (_indexEHMPKilledArray); };
   if (count _indexEHLocalArray > 1) then { { if (_forEachIndex > 0) then { (_x select 0) removeMPEventHandler ["Local", (_x select 1)]; }; } forEach (_indexEHLocalArray); };
   
   _indexEHMPKilledArray = [ [(allUnits select 0), -1] ];
   _indexEHLocalArray = [ [(allUnits select 0), -1] ];
   {
-    _indexMPKilled = _x addMPEventHandler ["MPKilled", { [_this select 0] spawn { sleep 3; (_this select 0) enableSimulation false; };}]; 
+    _indexMPKilled = _x addMPEventHandler ["MPKilled", _mpKilledEHCode];
     _indexEHMPKilledArray = _indexEHMPKilledArray + [[_x, _indexMPKilled]];
     _indexMPLocal = _x addMPEventHandler ["Local", { if (_this select 1) then {(_this select 0) enableSimulation true;} }];
     _indexEHLocalArray = _indexEHLocalArray + [[_x, _indexMPLocal]];
@@ -378,9 +366,6 @@ while {true} do {
     // If a player is in this group, don't swap to an HC
     { if (isPlayer _x) then { _swap = false; }; } forEach (units _x);
 
-    // Enable simulations for the duration of the AI pass
-    // { _x enableSimulation true; } forEach (units _x);
-
     // If load balance enabled, round robin between the HCs - else pass all to HC
     if ( _swap ) then {
       _rc = false;
@@ -400,9 +385,6 @@ while {true} do {
           default { diag_log format["clusterHC: [ERROR] No Valid HC to pass to.  _currentHC = %1", _currentHC]; };
         };
       };
-
-      // Disable simulations for this group after the pass
-      // { if (!isPlayer _x) then { _x enableSimulation false; }; } forEach (units _x);
 
       // If the transfer was successful, count it for accounting and diagnostic information
       if ( _rc ) then { _numTransfered = _numTransfered + 1; };
