@@ -17,14 +17,13 @@
 */
 
 // These variables may be manipulated
-rebalanceTimer = 60;  // Rebalance sleep timer in seconds
-corpseDecayTimer = (rebalanceTimer - 1); // Corpse decay timer in seconds, must be less than rebalanceTimer
-fpsThreshold = 15; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest from the player and working closer
-maxDistance = 0; // Set to 0 for no maximum distance of uncaching (technically, defaults to 30km)
+rebalanceTimer = 60; // Rebalance sleep timer in seconds
+corpseDecayTimer = (rebalanceTimer / 2); // Corpse decay timer in seconds, must be less than rebalanceTimer
+fpsThreshold = 20; // Each Player's FPS threshold to trigger caching AI groups/units the player has no line of sight to, starting from the furthest
+maxDistance = 0; // Set to 0 for no minimum distance to uncaching (technically, defaults to 30km)
 enableDiagPanel = true; // Enable or disable showing real time debug information
 
 diag_log "clusterHC: Started";
-private ["_diagPanel", "_simUnits", "_cacheUnits"];
 
 getGroupDistances = {
   private ["_groupDistancesInside"];
@@ -81,66 +80,88 @@ hasLineOfSight = {
   _rc
 };
 
+private "_simUnits";
+maxDistanceScale = maxDistance;
 _simUnits = {
   _enableSim = {
-    if (diag_fps >= fpsThreshold) then {
+    private "_tmpFPS";
+    _tmpFPS = diag_fps;
+    if (_tmpFPS >= fpsThreshold) then {
       if (!isServer && !hasInterface) exitWith {
         {
           if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; };
         } forEach (allUnits);
       };
-      _tmpFPS = diag_fps;
-      _scaleMaxDistance = maxDistance; // FPS > 30
-      if (_tmpFPS <= 30) then {_scaleMaxDistance = 300;}; // FPS 20 - 30
-      if (_tmpFPS <= 20) then {_scaleMaxDistance = 100;}; // FPS 10 - 20
-      if (_tmpFPS <= 10) then {_scaleMaxDistance = 25;}; // FPS 0 - 10
-      if (_scaleMaxDistance == 0) then { _scaleMaxDistance = 30000; };
+
+      if (_tmpFPS < 15) then {maxDistanceScale = 10;}; // FPS 0 - 15
+      if (_tmpFPS >= 15) then {maxDistanceScale = 50;}; // FPS 15 - 20
+      if (_tmpFPS >= 20) then {maxDistanceScale = 100;}; // FPS 20 - 25
+      if (_tmpFPS >= 25) then {maxDistanceScale = 300;}; // FPS 25 - 30
+      if (_tmpFPS >= 30) then {maxDistanceScale = 500;}; // FPS 30 - 35
+      if (_tmpFPS >= 35) then {maxDistanceScale = maxDistance;}; // FPS >= 35
+      if (maxDistanceScale == 0) then { maxDistanceScale = 30000; }; // Set default
       {
-        if (diag_fps >= fpsThreshold) then {
-          if (!simulationEnabled _x) then { _x enableSimulation true; }; };
-      } forEach ((position player) nearEntities _scaleMaxDistance);
+        if (_tmpFPS >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; };
+      } forEach ((position player) nearEntities maxDistanceScale);
     };
   };
-  while {true} do { ["clusterHC_EH_cleanUp", "onEachFrame", _enableSim] spawn BIS_fnc_addStackedEventHandler; sleep 1; ["clusterHC_EH_cleanUp", "onEachFrame"] spawn BIS_fnc_removeStackedEventHandler; };    
+  while {true} do { ["clusterHC_EH_cleanUp", "onEachFrame", _enableSim] call BIS_fnc_addStackedEventHandler; sleep 1; ["clusterHC_EH_cleanUp", "onEachFrame"] call BIS_fnc_removeStackedEventHandler; };
 };
 
 ///////////////////////// START PLAYER CODE /////////////////////////
+private ["_diagPanel", "_cacheUnits"];
 _diagPanel = {
-  private ["_panel", "_tmp"];
+  private "_panel";
   _panel = {
-    _tmp = 0;
-    { if (!simulationEnabled _x) then {_tmp = _tmp + 1;}; } forEach (allUnits);
+    private ["_numPlayers", "_cacheCountDiag"];
+    _numPlayersDiag = 0;
+    _cacheCountDiag = 0;
+    { if (isPlayer _x) then {_numPlayersDiag = _numPlayersDiag + 1;} else { if (!simulationEnabled _x) then {_cacheCountDiag = _cacheCountDiag + 1;}; }; } forEach (allUnits);
+
     hintSilent composeText [parseText "<t align='center'><t font='EtelkaMonospaceProBold'><t size='1.5'><t color='#CC0000'><t underline='true'>clusterHC</t></t></t><br/><t size='1.0'>Diagnostic Panel</t></t></t><br/>", lineBreak,
                             format ["FPS: %1", diag_fps], lineBreak,
-                            format ["FPSMin: %1", diag_fps], lineBreak,
+                            format ["FPSMin: %1", diag_fpsmin], lineBreak,
                             format ["Number of Units: %1", count allUnits], lineBreak,
+                            format ["Number of Players: %1", _numPlayersDiag], lineBreak,
                             format ["BLUFOR: %1", west countSide allUnits], lineBreak,
                             format ["OPFOR: %1", east countSide allUnits], lineBreak,
                             format ["CIV: %1", civilian countSide allUnits], lineBreak,
-                            format ["Cached: %1", _tmp]];
+                            format ["Dead: %1", count allDeadMen], lineBreak,
+                            format ["Units in Real Time: %1", (count allUnits) - _cacheCountDiag], lineBreak,
+                            format ["Units Cached: %1", _cacheCountDiag], lineBreak,
+                            format ["Max Distance To Uncache: %1", maxDistanceScale]];
   };
-  while {true} do { if (enableDiagPanel) then { _indexEH = addMissionEventHandler ["Draw3D", _panel]; sleep 1; removeMissionEventHandler ["Draw3D", _indexEH]; } else {hint ""; waitUntil{enableDiagPanel};}; };
+  while {true} do { if (enableDiagPanel) then { ["clusterHC_EH_diagPanel", "onEachFrame", _panel] call BIS_fnc_addStackedEventHandler; sleep 1; ["clusterHC_EH_diagPanel", "onEachFrame"] call BIS_fnc_removeStackedEventHandler; } else {hintSilent ""; waitUntil {enableDiagPanel};}; };
 };
 
 _cacheUnits = {
-  private ["_getGroupDistances", "_getFurthestElement", "_hasLineOfSight", "_groupDistances", "_cacheCount", "_furthestElement", "_hasClearLoS"];
+  private ["_getGroupDistances", "_getFurthestElement", "_hasLineOfSight", "_groupDistances", "_cacheCount", "_numPlayers", "_furthestElement", "_hasClearLoS"];
   _getGroupDistances = getGroupDistances;
   _getFurthestElement = getFurthestElement;
   _hasLineOfSight = hasLineOfSight;
 
   waitUntil {diag_fps <= fpsThreshold};  
   
+  _cacheCount = 0;
   _groupDistances = call _getGroupDistances;
   waitUntil {!isNil "_groupDistances"};
 
   while {true} do {
+    _numPlayers = 0;
+    { if (isPlayer _x) then {_numPlayers = _numPlayers + 1;}; } forEach (allUnits);    
     waitUntil {diag_fps <= fpsThreshold};
-    
-    _cacheCount = 0;
-    { if (_x select 1 == -1) then { _cacheCount = _cacheCount + 1; }; } forEach (_groupDistances);
-    
-    if ( _cacheCount == ((count _groupDistances) - 1)) then { _groupDistances = call _getGroupDistances; waitUntil {!isNil "_groupDistances"}; };
-    
+
+    // if ( _cacheCount == (((count _groupDistances) - 1) - _numPlayers) ) then {
+    if ( _cacheCount == (((count _groupDistances) - 1) - _numPlayers) ) then {
+      // Refresh cache
+      {_x enableSimulation true;} forEach (allUnits);
+      _cacheCount = 0;
+      _groupDistances = call _getGroupDistances;
+      waitUntil {!isNil "_groupDistances"};
+    };
+
+    // systemChat format ["clusterHC: _cacheCount = %1; (((count _groupDistances) - 1) - _numPlayers) = %2;", _cacheCount, (((count _groupDistances) - 1) - _numPlayers)];
+
     _furthestElement = _groupDistances call _getFurthestElement;
     waitUntil {!isNil "_furthestElement"};
 
@@ -149,16 +170,17 @@ _cacheUnits = {
         if (_x == (_groupDistances select _furthestElement) select 0) then {
           {
             if (!isPlayer _x) then {
-              _hasClearLoS = [player, _x] call _hasLineOfSight;
-              waitUntil {!isNil "_hasClearLoS"};
-
-              if ( !(_hasClearLoS) ) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
+              // _hasClearLoS = [player, _x] call _hasLineOfSight;
+              // waitUntil {!isNil "_hasClearLoS"};
+              // if ( !(_hasClearLoS) ) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
+              if ((damage _x) < 0.9) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };              
             };
           } forEach (units _x);
-
-          _groupDistances set [_furthestElement, [(allGroups select 0), -1]];
         };
       } forEach (allGroups);
+
+      _groupDistances set [_furthestElement, [(allGroups select 0), -1]];
+      _cacheCount = _cacheCount + 1;
     };
   };
 };
@@ -169,9 +191,9 @@ if (!isServer && hasInterface) exitWith {
 
   systemChat "Powered by clusterHC";
 
-  [] spawn _diagPanel;
   [] spawn _simUnits;
   [] spawn _cacheUnits;
+  [] spawn _diagPanel;
 };
 ///////////////////////// END PLAYER CODE /////////////////////////
 
@@ -226,10 +248,10 @@ _cacheUnitsHC = {
               {
                 if (!isPlayer _x) then {
                   private ["_hasClearLoS"];
-                  _hasClearLoS = [_currentLeader, _x] call _hasLineOfSight;
-                  waitUntil {!isNil "_hasClearLoS"};
-
-                  if ( !(_hasClearLoS) ) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
+                  // _hasClearLoS = [_currentLeader, _x] call _hasLineOfSight;
+                  // waitUntil {!isNil "_hasClearLoS"};
+                  // if ( !(_hasClearLoS) ) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
+                  if (simulationEnabled _x) then { if (alive _x) then { _x enableSimulation false; }; };
                 };
               } forEach (units _x);
 
@@ -255,6 +277,7 @@ _indexEHLocalArray = [ [(allUnits select 0), -1] ];
 
 _mpKilledEHCode = {
   [_this select 0] spawn {
+    (_this select 0) enableSimulation true;
     sleep 3;
     (_this select 0) enableSimulation false;
     if (isServer) then {
