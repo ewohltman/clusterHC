@@ -84,10 +84,10 @@ _simUnits = {
     { if (simulationEnabled _x) then {_numUncached = _numUncached + 1;}; } forEach (allUnits);
 
     if (_tmpFPS < 15) then {maxDistanceScale = 100;}; // FPS 0 - 15
-    if (_tmpFPS >= 15) then {maxDistanceScale = 300;}; // FPS 15 - 25
-    if (_tmpFPS >= 25) then {maxDistanceScale = 500;}; // FPS 25 - 30
-    if (_tmpFPS >= 30) then {maxDistanceScale = 1000;}; // FPS 30 - 35
-    if (_tmpFPS >= 35) then {maxDistanceScale = maxDistance;}; // FPS >= 35
+    if (_tmpFPS >= 15) then {maxDistanceScale = 300;}; // FPS 15 - 20
+    if (_tmpFPS >= 20) then {maxDistanceScale = 500;}; // FPS 20 - 25
+    if (_tmpFPS >= 25) then {maxDistanceScale = 1000;}; // FPS 25 - 30
+    if (_tmpFPS >= 30) then {maxDistanceScale = maxDistance;}; // FPS >= 35
     if (maxDistanceScale == 0) then { maxDistanceScale = 30000; }; // Set default
     {
       if (_tmpFPS <= fpsThreshold) then {
@@ -145,6 +145,7 @@ _cacheUnits = {
     waitUntil {diag_fps <= fpsThreshold};
 
     if ( _cacheCount == (((count _groupDistances) - 1) - _numPlayers) ) then {
+      sleep 1;
       // Refresh cache
       _numUncached = 0;
       { if (simulationEnabled _x) then {_numUncached = _numUncached + 1;}; } forEach (allUnits);
@@ -187,7 +188,7 @@ _cacheUnits = {
 ///////////////////////// END PLAYER FUNCTIONS /////////////////////////
 
 ///////////////////////// START PLAYER ONLY CODE /////////////////////////
-if (!isServer && hasInterface) exitWith {
+if (hasInterface) exitWith {
   waitUntil {!isNull player};
 
   systemChat "Powered by clusterHC";
@@ -313,7 +314,7 @@ while {true} do {
     if (_HC_ID > 2) then {
       // diag_log format ["clusterHC: Found HC with Client ID %1", _HC_ID];
     } else { 
-      diag_log "clusterHC: [WARN] HC disconnected";
+      diag_log "clusterHC: [WARN] HC is not connected";
 
       HC = objNull;
       _HC_ID = -1;
@@ -328,7 +329,7 @@ while {true} do {
       if (_HC2_ID > 2) then {
         // diag_log format ["clusterHC: Found HC2 with Client ID %1", _HC2_ID];
       } else { 
-        diag_log "clusterHC: [WARN] HC2 disconnected";
+        diag_log "clusterHC: [WARN] HC2 is not connected";
         
         HC2 = objNull;
         _HC2_ID = -1;
@@ -344,7 +345,7 @@ while {true} do {
       if (_HC3_ID > 2) then {
         // diag_log format ["clusterHC: Found HC3 with Client ID %1", _HC3_ID];
       } else { 
-        diag_log "clusterHC: [WARN] HC3 disconnected";
+        diag_log "clusterHC: [WARN] HC3 is not connected";
         
         HC3 = objNull;
         _HC3_ID = -1;
