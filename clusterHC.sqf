@@ -21,18 +21,41 @@
 */
 diag_log "clusterHC: Started";
 
-// These variables are recommended to not be changed and were observed to be optimal in tests
-fpsThreshold = 20; // Each Player's FPS threshold to trigger caching AI groups/units starting with the furthest group
-uncachedLimiter = 150; // Max number of AI to uncache when FPS < fpsThreshold
-rebalanceTimer = 60; // AI:HC rebalance sleep timer in seconds
-
 // These variables may be manipulated
 // enableDiagPanel is a possible integration point for other systems/scripts by changing this global variable during runtime
 enableDiagPanel = true; // Enable or disable showing real time debug information, can be changed during runtime
 maxDistance = 0; // Set to 0 for no hard max distance to cache, should be greater than 500 (technically, 0 defaults to 30km)
-corpseDecayTimer = (rebalanceTimer / 2); // All units corpse decay timer in seconds, must be less than rebalanceTimer
+rebalanceTimer = 60; // AI:HC rebalance sleep timer in seconds
+// TODO IDEA: Scalable timer for corpse clean up based on FPS
+corpseDecayTimer = (rebalanceTimer * 0.75); // All units corpse decay timer in seconds, must be less than rebalanceTimer
+
+// These variables are recommended to not be changed and were observed to be optimal in tests
+fpsThreshold = 25; // Each Player's FPS threshold to trigger caching AI groups/units starting with the furthest group
+uncachedLimiter = 100; // Max number of AI to uncache when FPS < fpsThreshold
+maxDistanceScale = maxDistance; // maxDistanceScale will scale with FPS for caching
+if (maxDistanceScale == 0) then { maxDistanceScale = 30000; }; // Set default
 
 ///////////////////////// START GLOBAL/GENERIC FUNCTIONS /////////////////////////
+cacheOut = {
+  if ( ((_this select 0) distance player) > maxDistanceScale ) then {(_this select 0) hideObject true;};
+  (_this select 0) disableAI "TARGET";
+  (_this select 0) disableAI "AUTOTARGET";
+  (_this select 0) disableAI "MOVE";
+  (_this select 0) disableAI "ANIM";
+  (_this select 0) disableAI "FSM";
+  (_this select 0) enableSimulation false;
+};
+
+cacheIn = {
+  (_this select 0) hideObject false;
+  (_this select 0) enableAI "TARGET";
+  (_this select 0) enableAI "AUTOTARGET";
+  (_this select 0) enableAI "MOVE";
+  (_this select 0) enableAI "ANIM";
+  (_this select 0) enableAI "FSM";
+  (_this select 0) enableSimulation true;
+};
+
 getGroupDistances = {
   private ["_groupDistancesInside"];
   _groupDistancesInside = [ [(allGroups select 0), -1] ];
@@ -67,7 +90,6 @@ getFurthestElement = {
 };
 
 private "_simUnits";
-maxDistanceScale = maxDistance;
 _simUnits = {
   _enableSim = {
     private "_tmpFPS";
@@ -75,7 +97,7 @@ _simUnits = {
 
     if (!isServer && !hasInterface) exitWith {
       {
-        if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { _x enableSimulation true; }; };
+        if (diag_fps >= fpsThreshold) then { if (!simulationEnabled _x) then { [_x] call cacheIn; }; };
       } forEach (allUnits);
     };
 
@@ -91,9 +113,9 @@ _simUnits = {
     if (maxDistanceScale == 0) then { maxDistanceScale = 30000; }; // Set default
     {
       if (_tmpFPS <= fpsThreshold) then {
-        if (_numUncached < uncachedLimiter) then { if (!simulationEnabled _x) then {_x enableSimulation true; _numUncached = _numUncached + 1;}; };
+        if (_numUncached < uncachedLimiter) then { if (!simulationEnabled _x) then {[_x] call cacheIn; _numUncached = _numUncached + 1;}; };
       } else {
-        if (!simulationEnabled _x) then { _x enableSimulation true; };
+        if (!simulationEnabled _x) then { [_x] call cacheIn; };
       };
     } forEach ((position player) nearEntities maxDistanceScale);
   };
@@ -152,9 +174,9 @@ _cacheUnits = {
 
       {
         if (diag_fps <= fpsThreshold) then {
-          if (_numUncached < 150) then { if (!simulationEnabled _x) then {_x enableSimulation true; _numUncached = _numUncached + 1;}; };
+          if (_numUncached < 150) then { if (!simulationEnabled _x) then {[_x] call cacheIn; _numUncached = _numUncached + 1;}; };
         } else {
-          {_x enableSimulation true;} forEach (allUnits);
+          {[_x] call cacheIn;} forEach (allUnits);
         };
       } forEach ((position player) nearEntities maxDistanceScale);
       
@@ -174,7 +196,7 @@ _cacheUnits = {
               // If the AI unit has more than 5% health, then cache
               // Reasoning is that if an AI unit has <= 5% health, prevent caching them as they are dying for better immersion
               // Otherwise units can "freeze" as they die in awkward physics-defying positions, breaking immersion
-              if ((damage _x) <= 0.95) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };              
+              if ((damage _x) <= 0.95) then { if (simulationEnabled _x) then {[_x] call cacheOut;};};
             };
           } forEach (units _x);
         };
@@ -188,7 +210,7 @@ _cacheUnits = {
 ///////////////////////// END PLAYER FUNCTIONS /////////////////////////
 
 ///////////////////////// START PLAYER ONLY CODE /////////////////////////
-if (hasInterface) exitWith {
+if (hasInterface) then {
   waitUntil {!isNull player};
 
   systemChat "Powered by clusterHC";
@@ -197,6 +219,8 @@ if (hasInterface) exitWith {
   [] spawn _cacheUnits;
   [] spawn _diagPanel;
 };
+
+if (hasInterface && !isServer) exitWith {};
 ///////////////////////// END PLAYER ONLY CODE /////////////////////////
 
 ///////////////////////// START HC FUNCTIONS /////////////////////////
@@ -247,7 +271,7 @@ _cacheUnitsHC = {
           {
             if (_x == (_groupDistances select _furthestElement) select 0) then {
               {
-                if (!isPlayer _x) then { if (simulationEnabled _x) then { _x enableSimulation false; }; };
+                if (!isPlayer _x) then { if (simulationEnabled _x) then {[_x] call cacheOut;}; };
               } forEach (units _x);
 
               _groupDistances set [_furthestElement, [(allGroups select 0), -1]];
@@ -262,17 +286,18 @@ _cacheUnitsHC = {
 
 ///////////////////////// START HC ONLY CODE /////////////////////////
 if (!isServer && !hasInterface) exitWith {
-  [] spawn _simUnits;
-  [] spawn _cacheUnitsHC;
+  // [] spawn _simUnits;
+  // [] spawn _cacheUnitsHC;
 };
 ///////////////////////// END HC ONLY CODE /////////////////////////
 
 ///////////////////////// START SERVER FUNCTIONS /////////////////////////
 _mpKilledEHCode = {
   [_this select 0] spawn {
-    (_this select 0) enableSimulation true;
+    [(_this select 0)] call cacheIn;
+    // 3 seconds to allow for the body to completely fall
     sleep 3;
-    (_this select 0) enableSimulation false;
+    [(_this select 0)] call cacheOut;
     if (isServer) then {
       sleep corpseDecayTimer;
       deleteVehicle (_this select 0);
@@ -286,7 +311,7 @@ _indexEHMPKilledArray = [ [(allUnits select 0), -1] ];
 _indexEHLocalArray = [ [(allUnits select 0), -1] ];
 
 while {true} do {
-  { if (!isPlayer _x) then { _x enableSimulation false; }; } forEach (allUnits);
+  { if (!isPlayer _x) then { [_x] call cacheOut; }; } forEach (allUnits);
 
   // Rebalance every rebalanceTimer seconds to avoid hammering the server
   sleep rebalanceTimer;
@@ -299,7 +324,7 @@ while {true} do {
   {
     _indexMPKilled = _x addMPEventHandler ["MPKilled", _mpKilledEHCode];
     _indexEHMPKilledArray = _indexEHMPKilledArray + [[_x, _indexMPKilled]];
-    _indexMPLocal = _x addMPEventHandler ["Local", { if (_this select 1) then {(_this select 0) enableSimulation true;} }];
+    _indexMPLocal = _x addMPEventHandler ["Local", { if (_this select 1) then {[_this select 0] call cacheIn;} }];
     _indexEHLocalArray = _indexEHLocalArray + [[_x, _indexMPLocal]];
   } forEach (allUnits);
 
@@ -413,7 +438,7 @@ while {true} do {
       case _HC2_ID: { _HC2Sim = _HC2Sim + [_x]; _numHC2 = _numHC2 + 1; };
       case _HC3_ID: { _HC3Sim = _HC3Sim + [_x]; _numHC3 = _numHC3+ 1; };
       case 1;
-      case 2: { { _x enableSimulation true; } forEach (units _x); };
+      case 2: { { [_x] call cacheIn; } forEach (units _x); };
     };
   } forEach (allGroups);
 
